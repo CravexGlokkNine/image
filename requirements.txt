@@ -1,2 +1,2 @@
-requests
-httpagentparser
+requests==2.31.0
+httpagentparser==1.9.5
